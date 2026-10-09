@@ -397,15 +397,65 @@ bool Scrollbar::mouse_event(Mouse what, float x, float y)
 // ---------------------------------------------------------------------------
 // Screen
 
+void Screen::push(Widget* child, float x, float y, bool modal)
+{
+    layers.push_back({child, x, y, modal});
+}
+
+void Screen::pop()
+{
+    if(layers.empty()) {
+        return;
+    }
+    if(layers.back().child == grabbing_layer) {
+        grabbing_layer = nullptr;
+    }
+    layers.pop_back();
+}
+
 void Screen::draw(Renderer& r)
 {
-    child->layout(r);
-    child->draw(r, child_x, child_y);
+    for(auto& layer: layers) {
+        layer.child->layout(r);
+        layer.child->draw(r, layer.x, layer.y);
+    }
+}
+
+bool Screen::dispatch(Layer& layer, Mouse what, float x, float y)
+{
+    return layer.child->mouse_event(what, x - layer.x, y - layer.y);
 }
 
 bool Screen::mouse_event(Mouse what, float x, float y)
 {
-    return child->mouse_event(what, x - child_x, y - child_y);
+    if(grabbing_layer != nullptr) {
+        // The layer that took the press gets everything up to and including the release.
+        for(auto& layer: layers) {
+            if(layer.child == grabbing_layer) {
+                bool handled = dispatch(layer, what, x, y);
+                if(what == Mouse::Release) {
+                    grabbing_layer = nullptr;
+                }
+                return handled;
+            }
+        }
+        grabbing_layer = nullptr;
+    }
+
+    // Copy each layer before dispatching: a callback may push or pop layers.
+    for(size_t i = layers.size(); i-- > 0;) {
+        Layer layer = layers[i];
+        if(dispatch(layer, what, x, y)) {
+            if(what == Mouse::Press) {
+                grabbing_layer = layer.child;
+            }
+            return true;
+        }
+        if(layer.modal) {
+            return false;
+        }
+    }
+    return false;
 }
 
 };

@@ -76,3 +76,9 @@ target_compile_definitions(pyjuke_gfx PUBLIC GLFW_INCLUDE_NONE)
 add_executable(gfx_demo gfx_demo.cpp)
 target_link_libraries(gfx_demo PRIVATE pyjuke_gfx)
 target_compile_options(gfx_demo PRIVATE ${PYJUKE_WARNINGS})
+
+# Widget event routing (no window or renderer needed to run).
+add_executable(ui_tests tests/test_ui.cpp ui.cpp)
+target_link_libraries(ui_tests PRIVATE pyjuke_gfx)
+target_compile_options(ui_tests PRIVATE ${PYJUKE_WARNINGS})
+add_test(NAME ui_tests COMMAND ui_tests)

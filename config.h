@@ -8,7 +8,8 @@
 //
 // Keys: musicdir, fullscreen, width, height, font, font_size,
 //       seek_wait_millis, seek_repeat_millis, seek_delta_millis,
-//       reverse_skip_millis, status_repeat_millis, clock_repeat_millis.
+//       reverse_skip_millis, status_repeat_millis, clock_repeat_millis,
+//       outputs, stream_port, default_output.
 
 #ifndef PYJUKE_CONFIG_H
 #define PYJUKE_CONFIG_H
@@ -34,6 +35,11 @@ struct Config {
     int64_t reverse_skip_millis = 4000;
     int64_t status_repeat_millis = 200;  // position display refresh while playing
     int64_t clock_repeat_millis = 900;   // clock display refresh
+
+    // Network outputs (UPnP renderers on the LAN) in the output picker.
+    bool outputs = true;
+    int stream_port = 0;                 // port the library is served on; 0 = any free port
+    std::string default_output;          // renderer name to switch to when it appears (empty: play locally)
 };
 
 // Defaults, with musicdir = $HOME/music (or "./music" if HOME is unset).

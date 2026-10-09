@@ -77,6 +77,11 @@ public:
     void toggle_play();
     // Shuffle -> Warp -> Fly -> Jump -> Step -> Shuffle.
     void change_mode();
+    // Load the current track again (on a possibly different AudioControl
+    // behind the same reference) and seek to position_ms; the play/pause
+    // state is kept. For moving playback between outputs. Does nothing
+    // when stopped or without a track.
+    void reload_current(int64_t position_ms);
 
     // Keyboard next/prev keys (key-down / key-up; do not forward auto-repeat).
     // Held longer than seek_wait_ms: seeks every seek_repeat_ms until release.

@@ -205,6 +205,13 @@ void Player::toggle_play()
     }
 }
 
+void Player::reload_current(int64_t position_ms)
+{
+    if (current_ < 0 || state_ == PlayState::Stopped) return;
+    start_track(static_cast<size_t>(current_), false);
+    if (position_ms > 0) audio_.seek_ms(position_ms);
+}
+
 void Player::change_mode()
 {
     switch (mode_) {

@@ -215,19 +215,41 @@ private:
     float drag_offset = 0;
 };
 
-// Top of the tree: one child at a fixed offset in design space.
+// Top of the tree: a stack of layers, each one widget tree at a fixed offset
+// in design space.  Layers are drawn back to front and offered mouse events
+// front to back; the first layer whose tree handles an event takes it.  A
+// press that a layer takes grabs that layer until the release, as Container
+// does for its children.  A layer pushed as modal stops the search: an event
+// it does not handle is dropped rather than passed to the layers behind it,
+// which is what a pop-up wants.  Widgets within one layer never overlap;
+// stacking exists only here.
 class Screen
 {
 public:
-    Screen(Widget* child, float x, float y) : child(child), child_x(x), child_y(y) {}
+    Screen() = default;
+    Screen(Widget* child, float x, float y) { push(child, x, y); }
+
+    void push(Widget* child, float x, float y, bool modal = false);
+    void pop();
+    size_t depth() const { return layers.size(); }
 
     void draw(Renderer& r);
+    // Returns true if some layer handled the event.
     bool mouse_event(Mouse what, float x, float y);
 
 private:
-    Widget* child;
-    float child_x;
-    float child_y;
+    struct Layer
+    {
+        Widget* child;
+        float x;
+        float y;
+        bool modal;
+    };
+
+    bool dispatch(Layer& layer, Mouse what, float x, float y);
+
+    std::vector<Layer> layers;
+    Widget* grabbing_layer = nullptr;
 };
 
 };

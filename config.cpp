@@ -128,6 +128,12 @@ Config parse_config(std::istream& in, const Config& base, std::ostream& warn, co
             millis(c.status_repeat_millis);
         } else if (key == "clock_repeat_millis") {
             millis(c.clock_repeat_millis);
+        } else if (key == "outputs") {
+            if (!parse_bool(val, c.outputs)) bad();
+        } else if (key == "stream_port") {
+            if (!parse_int(val, c.stream_port, 0, 65535)) bad();
+        } else if (key == "default_output") {
+            c.default_output = val;
         } else {
             warning("unknown key '" + key + "', ignoring");
         }

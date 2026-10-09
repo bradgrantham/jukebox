@@ -9,10 +9,18 @@
 //                                      exits when the track ends
 //   pyjuke-cli --scan DIR [-v]         count tracks; -v lists each with
 //                                      its resolved metadata
+//   pyjuke-cli --renderers [SECS]      list UPnP MediaRenderers on the LAN
+//                                      (search for SECS seconds, default 3)
+//   pyjuke-cli --cast NAME FILE        play FILE on the renderer whose name
+//                                      contains NAME (case-insensitive), with
+//                                      the same stdin commands as --play
 
 #include "audio.h"
 #include "library.h"
 #include "player.h"
+#include "remote_renderer.h"
+#include "track_server.h"
+#include "upnp.h"
 
 #include "minimp3_ex.h"
 
@@ -20,7 +28,10 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
+#include <functional>
+#include <optional>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -40,7 +51,9 @@ int usage()
     std::fprintf(stderr,
                  "usage: pyjuke-cli --decode FILE OUT.wav\n"
                  "       pyjuke-cli --play FILE\n"
-                 "       pyjuke-cli --scan DIR [-v]\n");
+                 "       pyjuke-cli --scan DIR [-v]\n"
+                 "       pyjuke-cli --renderers [SECS]\n"
+                 "       pyjuke-cli --cast NAME FILE\n");
     return 2;
 }
 
@@ -110,12 +123,12 @@ const char* state_str(AudioState s)
     return "?";
 }
 
-int cmd_play(const char* path)
+// Drives any AudioControl from stdin (p / s N / q), printing the position
+// once a second via `status`, until the track ends, fails, or `abort` says
+// the output is gone. Returns the process exit status.
+int run_console(AudioControl& audio, std::atomic<bool>& woke, const std::function<std::string()>& status,
+                const std::function<const char*()>& abort = {})
 {
-    std::atomic<bool> woke{false};
-    AudioEngine audio([&] { woke.store(true); });
-    audio.load(path, false);
-
     using clock = std::chrono::steady_clock;
     auto last_print = clock::now() - std::chrono::seconds(1);
     bool stdin_open = true;
@@ -159,7 +172,7 @@ int cmd_play(const char* path)
 
         if (woke.exchange(false)) {
             if (audio.take_track_error()) {
-                std::printf("error: %s\n", audio.last_error().c_str());
+                std::printf("error: %s\n", status().c_str());
                 return 1;
             }
             if (audio.take_track_ended()) {
@@ -167,17 +180,113 @@ int cmd_play(const char* path)
                             static_cast<long long>(audio.position_ms()));
                 return 0;
             }
+            if (abort) {
+                if (const char* why = abort()) {
+                    std::printf("%s\n", why);
+                    return 1;
+                }
+            }
         }
 
         auto now = clock::now();
         if (now - last_print >= std::chrono::seconds(1)) {
             last_print = now;
-            std::printf("pos %s / %s (%lld ms) %s %d Hz %d ch\n", format_time(audio.position_ms()).c_str(),
+            std::printf("pos %s / %s (%lld ms) %s\n", format_time(audio.position_ms()).c_str(),
                         format_time(audio.duration_ms()).c_str(), static_cast<long long>(audio.position_ms()),
-                        state_str(audio.state()), audio.sample_rate(), audio.channels());
+                        status().c_str());
             std::fflush(stdout);
         }
     }
+}
+
+int cmd_play(const char* path)
+{
+    std::atomic<bool> woke{false};
+    AudioEngine audio([&] { woke.store(true); });
+    audio.load(path, false);
+    return run_console(audio, woke, [&] {
+        if (!audio.last_error().empty()) return audio.last_error();
+        return std::string(state_str(audio.state())) + " " + std::to_string(audio.sample_rate()) + " Hz " +
+               std::to_string(audio.channels()) + " ch";
+    });
+}
+
+std::string lower(std::string s)
+{
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+// Search for `seconds`, printing renderers as they turn up.
+std::vector<upnp::Renderer> find_renderers(double seconds, bool print)
+{
+    std::atomic<bool> woke{false};
+    upnp::RendererBrowser browser([&] { woke.store(true); });
+    browser.refresh(static_cast<int>(seconds * 1000));
+    size_t printed = 0;
+    while (browser.searching()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (print && woke.exchange(false)) {
+            auto list = browser.renderers();
+            for (; printed < list.size(); ++printed)
+                std::printf("%-30s %s\n       control %s\n", list[printed].name.c_str(), list[printed].udn.c_str(),
+                            list[printed].control_url.c_str());
+            std::fflush(stdout);
+        }
+    }
+    auto list = browser.renderers();
+    if (print)
+        for (; printed < list.size(); ++printed)
+            std::printf("%-30s %s\n       control %s\n", list[printed].name.c_str(), list[printed].udn.c_str(),
+                        list[printed].control_url.c_str());
+    return list;
+}
+
+int cmd_renderers(double seconds)
+{
+    auto list = find_renderers(seconds, true);
+    std::printf("%zu renderer%s\n", list.size(), list.size() == 1 ? "" : "s");
+    return 0;
+}
+
+int cmd_cast(const char* name, const char* file)
+{
+    std::filesystem::path path = std::filesystem::absolute(file);
+    if (!std::filesystem::is_regular_file(path)) {
+        std::fprintf(stderr, "%s: not a file\n", file);
+        return 1;
+    }
+    std::string want = lower(name);
+    std::optional<upnp::Renderer> target;
+    for (int attempt = 0; attempt < 3 && !target; ++attempt) {
+        for (const upnp::Renderer& r : find_renderers(2.5, false))
+            if (lower(r.name).find(want) != std::string::npos) target = r;
+    }
+    if (!target) {
+        std::fprintf(stderr, "no renderer whose name contains \"%s\" (try --renderers)\n", name);
+        return 1;
+    }
+    std::string host = net::local_address_for(target->host);
+    if (host.empty()) {
+        std::fprintf(stderr, "no route to %s\n", target->host.c_str());
+        return 1;
+    }
+    TrackServer server({path});
+    std::string err;
+    if (!server.start(0, &err)) {
+        std::fprintf(stderr, "track server: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("casting %s\n     to %s (%s)\n     as %s\n", path.c_str(), target->name.c_str(),
+                target->control_url.c_str(), server.url_for(0, host).c_str());
+    std::fflush(stdout);
+
+    std::atomic<bool> woke{false};
+    RemoteRenderer audio(*target, server, host, path.parent_path(), [&] { woke.store(true); });
+    audio.load(path.string(), false);
+    return run_console(
+        audio, woke, [&] { return audio.last_error().empty() ? std::string("remote") : audio.last_error(); },
+        [&]() -> const char* { return audio.lost() ? "renderer lost" : nullptr; });
 }
 
 int cmd_scan(const char* dir, bool verbose)
@@ -212,6 +321,8 @@ int main(int argc, char** argv)
     std::string cmd = argv[1];
     if (cmd == "--decode" && argc == 4) return cmd_decode(argv[2], argv[3]);
     if (cmd == "--play" && argc == 3) return cmd_play(argv[2]);
+    if (cmd == "--renderers" && (argc == 2 || argc == 3)) return cmd_renderers(argc == 3 ? std::atof(argv[2]) : 3.0);
+    if (cmd == "--cast" && argc == 4) return cmd_cast(argv[2], argv[3]);
     if (cmd == "--scan" && (argc == 3 || argc == 4)) {
         bool verbose = false;
         const char* dir = nullptr;

@@ -3,10 +3,13 @@
 #undef NDEBUG
 #include <cassert>
 
+#include "audio_switch.h"
 #include "config.h"
 #include "id3.h"
 #include "library.h"
 #include "player.h"
+
+void run_network_tests(const std::filesystem::path& tmp);  // tests/test_network.cpp
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -882,6 +885,56 @@ static void test_error_skip()
 
 // ---------------------------------------------------------------------------
 
+static void test_reload_current()
+{
+    section("reload_current: same track and position on a new output, state kept");
+    FakeAudio a, b;
+    AudioSwitch sw(a);
+    auto meta = [](const fs::path& f) { return TrackInfo{f.stem().string(), "", ""}; };
+    Player p(sw, make_tracks(3), "/m", PlayerTiming{}, 1, meta);
+    p.reload_current(1000);  // nothing playing yet: no-op
+    assert(a.loads.empty());
+    p.start(0);
+    CHECK_EQ(a.loads.size(), size_t(1));
+    std::string current = p.current_path().string();
+    uint64_t serial = p.track_serial();
+    a.pos = 42000;
+
+    int64_t pos = p.position_ms();  // read before switching, as the app does
+    sw.set_target(b);
+    p.reload_current(pos);
+    CHECK_EQ(b.loads.size(), size_t(1));
+    CHECK_EQ(b.loads[0], current);
+    assert(!b.load_paused[0]);
+    CHECK_EQ(b.seeks.size(), size_t(1));
+    CHECK_EQ(b.seeks[0], int64_t(42000));
+    CHECK_EQ(a.loads.size(), size_t(1));  // the old output was not touched
+    assert(p.state() == PlayState::Playing);
+    assert(p.track_serial() > serial);
+    CHECK_EQ(p.current_path().string(), current);
+
+    // Paused: the new output loads paused, position 0 means no seek.
+    p.toggle_play();
+    assert(p.state() == PlayState::Paused);
+    sw.set_target(a);
+    p.reload_current(0);
+    CHECK_EQ(a.loads.size(), size_t(2));
+    assert(a.load_paused[1]);
+    CHECK_EQ(a.seeks.size(), size_t(0));
+    assert(p.state() == PlayState::Paused);
+
+    // Stopped (every track failed): nothing happens.
+    FakeAudio c;
+    c.fail_all = true;
+    AudioSwitch sw2(c);
+    Player q(sw2, make_tracks(2), "/m", PlayerTiming{}, 1, meta);
+    q.start(0);
+    while (q.state() != PlayState::Stopped) q.tick(0);
+    size_t loads = c.loads.size();
+    q.reload_current(5000);
+    CHECK_EQ(c.loads.size(), loads);
+}
+
 static void test_config()
 {
     section("config parsing");
@@ -899,6 +952,9 @@ static void test_config()
     CHECK_EQ(d.reverse_skip_millis, 4000);
     CHECK_EQ(d.status_repeat_millis, 200);
     CHECK_EQ(d.clock_repeat_millis, 900);
+    assert(d.outputs);
+    CHECK_EQ(d.stream_port, 0);
+    assert(d.default_output.empty());
 
     std::istringstream in(
         "# comment\n"
@@ -915,6 +971,9 @@ static void test_config()
         "reverse_skip_millis = 3000\n"
         "status_repeat_millis = 250\n"
         "clock_repeat_millis = 1000\n"
+        "outputs = off\n"
+        "stream_port = 49200\n"
+        "default_output = Living Room\n"
         "bogus = 1\n"
         "width = wide\n"
         "no equals sign\n"
@@ -933,11 +992,14 @@ static void test_config()
     CHECK_EQ(c.reverse_skip_millis, 3000);
     CHECK_EQ(c.status_repeat_millis, 250);
     CHECK_EQ(c.clock_repeat_millis, 1000);
+    assert(!c.outputs);
+    CHECK_EQ(c.stream_port, 49200);
+    CHECK_EQ(c.default_output, std::string("Living Room"));
     std::string w = warn.str();
-    assert(w.find("test.cfg:15: unknown key 'bogus'") != std::string::npos);
-    assert(w.find("test.cfg:16: invalid value 'wide'") != std::string::npos);
-    assert(w.find("test.cfg:17:") != std::string::npos);
-    assert(w.find("test.cfg:18: invalid value 'maybe'") != std::string::npos);
+    assert(w.find("test.cfg:18: unknown key 'bogus'") != std::string::npos);
+    assert(w.find("test.cfg:19: invalid value 'wide'") != std::string::npos);
+    assert(w.find("test.cfg:20:") != std::string::npos);
+    assert(w.find("test.cfg:21: invalid value 'maybe'") != std::string::npos);
 
     // Missing file -> defaults, no throw.
     Config m = load_config("/nonexistent/pyjuke/config");
@@ -960,7 +1022,9 @@ int main()
     test_seek_timing();
     test_state_and_end();
     test_error_skip();
+    test_reload_current();
     test_config();
+    run_network_tests(td.path);
     std::printf("all tests passed\n");
     return 0;
 }
