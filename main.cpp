@@ -35,6 +35,7 @@
 #include "audio_switch.h"
 #include "config.h"
 #include "library.h"
+#include "local_volume.h"
 #include "net.h"
 #include "player.h"
 #include "remote_renderer.h"
@@ -651,6 +652,13 @@ int run(GLFWwindow* window, const pyjuke::Config& config, bool validation, doubl
     if(!glfwWindowShouldClose(window)) {
         // The engine goes away before the caller terminates GLFW, which its wake callback uses.
         pyjuke::AudioEngine audio([] { glfwPostEmptyEvent(); });
+        if(config.local_volume == "system") {
+            if(auto backend = pyjuke::LocalVolume::open()) {
+                audio.use_system_volume(std::move(backend));
+            } else {
+                fprintf(stderr, "system volume not available; the fader controls pyjuke's own gain\n");
+            }
+        }
         pyjuke::AudioSwitch audio_switch(audio);
 
         // Network outputs: serve the library and look for renderers.

@@ -955,6 +955,7 @@ static void test_config()
     assert(d.outputs);
     CHECK_EQ(d.stream_port, 0);
     assert(d.default_output.empty());
+    CHECK_EQ(d.local_volume, std::string("system"));
 
     std::istringstream in(
         "# comment\n"
@@ -974,6 +975,7 @@ static void test_config()
         "outputs = off\n"
         "stream_port = 49200\n"
         "default_output = Living Room\n"
+        "local_volume = App\n"
         "bogus = 1\n"
         "width = wide\n"
         "no equals sign\n"
@@ -995,11 +997,17 @@ static void test_config()
     assert(!c.outputs);
     CHECK_EQ(c.stream_port, 49200);
     CHECK_EQ(c.default_output, std::string("Living Room"));
+    CHECK_EQ(c.local_volume, std::string("app"));
     std::string w = warn.str();
-    assert(w.find("test.cfg:18: unknown key 'bogus'") != std::string::npos);
-    assert(w.find("test.cfg:19: invalid value 'wide'") != std::string::npos);
-    assert(w.find("test.cfg:20:") != std::string::npos);
-    assert(w.find("test.cfg:21: invalid value 'maybe'") != std::string::npos);
+    assert(w.find("test.cfg:19: unknown key 'bogus'") != std::string::npos);
+    assert(w.find("test.cfg:20: invalid value 'wide'") != std::string::npos);
+    assert(w.find("test.cfg:21:") != std::string::npos);
+    assert(w.find("test.cfg:22: invalid value 'maybe'") != std::string::npos);
+    std::istringstream bad_lv("local_volume = loud\n");
+    std::ostringstream warn2;
+    Config lv = parse_config(bad_lv, d, warn2, "t");
+    CHECK_EQ(lv.local_volume, std::string("system"));
+    assert(warn2.str().find("invalid value 'loud'") != std::string::npos);
 
     // Missing file -> defaults, no throw.
     Config m = load_config("/nonexistent/pyjuke/config");

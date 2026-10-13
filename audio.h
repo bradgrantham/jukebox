@@ -19,6 +19,7 @@
 #define PYJUKE_AUDIO_H
 
 #include "audio_control.h"
+#include "local_volume.h"
 
 #include <atomic>
 #include <cstdint>
@@ -59,10 +60,15 @@ public:
     int64_t duration_ms() const override;
     bool take_track_ended() override;
     bool take_track_error() override;
-    // A software gain on the decoded samples (volume squared, so the slider
-    // feels even); starts at 100. Independent of the system volume.
+    // Without a system backend: a software gain on the decoded samples
+    // (volume squared, so the slider feels even), starting at 100. With one
+    // (use_system_volume), the computer's output volume, and the gain stays
+    // at 1. Opted into explicitly so tests never touch the machine's volume.
     void set_volume(int percent) override;
     int volume() const override;
+    void use_system_volume(std::unique_ptr<LocalVolume> backend);
+    // The backend's name, or empty when the software gain is in use.
+    std::string volume_backend() const;
 
     AudioState state() const;
     // Human-readable description of the most recent error (empty if none).

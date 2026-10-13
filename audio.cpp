@@ -67,6 +67,7 @@ struct AudioEngine::Impl {
     std::atomic<bool> error{false};
     std::atomic<int> volume_percent{100};
     std::atomic<float> gain{1.0f};
+    std::unique_ptr<LocalVolume> system_volume;  // controlling thread only
 
     // ---- audio thread only ----
     std::unique_ptr<mp3dec_ex_t> dec;
@@ -370,12 +371,34 @@ void AudioEngine::seek_ms(int64_t ms)
 void AudioEngine::set_volume(int percent)
 {
     percent = std::clamp(percent, 0, 100);
+    if (impl_->system_volume) {
+        impl_->system_volume->set_volume(percent);
+        return;
+    }
     impl_->volume_percent.store(percent);
     float v = static_cast<float>(percent) / 100.0f;
     impl_->gain.store(v * v);
 }
 
-int AudioEngine::volume() const { return impl_->volume_percent.load(); }
+int AudioEngine::volume() const
+{
+    if (impl_->system_volume) return impl_->system_volume->volume();
+    return impl_->volume_percent.load();
+}
+
+void AudioEngine::use_system_volume(std::unique_ptr<LocalVolume> backend)
+{
+    impl_->system_volume = std::move(backend);
+    if (impl_->system_volume) {
+        impl_->volume_percent.store(100);
+        impl_->gain.store(1.0f);
+    }
+}
+
+std::string AudioEngine::volume_backend() const
+{
+    return impl_->system_volume ? impl_->system_volume->name() : std::string();
+}
 
 int64_t AudioEngine::position_ms() const { return impl_->pos.load(); }
 int64_t AudioEngine::duration_ms() const { return impl_->dur.load(); }

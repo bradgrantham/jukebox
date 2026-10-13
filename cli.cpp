@@ -1,10 +1,13 @@
 // cli.cpp - pyjuke-cli: headless checks of the decoder, audio thread and scanner.
 //
 //   pyjuke-cli --decode FILE OUT.wav   decode whole file to 16-bit PCM WAV
-//   pyjuke-cli --play FILE             play; stdin commands:
+//   pyjuke-cli --play FILE [--app-volume]
+//                                      play; stdin commands:
 //                                        p      pause / resume
 //                                        s N    seek to N seconds
-//                                        v N    volume 0..100
+//                                        v N    volume 0..100 (the system
+//                                               volume, or pyjuke's own gain
+//                                               with --app-volume)
 //                                        q      quit
 //                                      prints position once a second and
 //                                      exits when the track ends
@@ -51,7 +54,7 @@ int usage()
 {
     std::fprintf(stderr,
                  "usage: pyjuke-cli --decode FILE OUT.wav\n"
-                 "       pyjuke-cli --play FILE\n"
+                 "       pyjuke-cli --play FILE [--app-volume]\n"
                  "       pyjuke-cli --scan DIR [-v]\n"
                  "       pyjuke-cli --renderers [SECS]\n"
                  "       pyjuke-cli --cast NAME FILE\n");
@@ -204,10 +207,14 @@ int run_console(AudioControl& audio, std::atomic<bool>& woke, const std::functio
     }
 }
 
-int cmd_play(const char* path)
+int cmd_play(const char* path, bool app_volume)
 {
     std::atomic<bool> woke{false};
     AudioEngine audio([&] { woke.store(true); });
+    if (!app_volume) {
+        if (auto backend = LocalVolume::open()) audio.use_system_volume(std::move(backend));
+    }
+    std::printf("volume: %s\n", audio.volume_backend().empty() ? "pyjuke's own gain" : audio.volume_backend().c_str());
     audio.load(path, false);
     return run_console(audio, woke, [&] {
         if (!audio.last_error().empty()) return audio.last_error();
@@ -325,7 +332,8 @@ int main(int argc, char** argv)
     if (argc < 2) return usage();
     std::string cmd = argv[1];
     if (cmd == "--decode" && argc == 4) return cmd_decode(argv[2], argv[3]);
-    if (cmd == "--play" && argc == 3) return cmd_play(argv[2]);
+    if (cmd == "--play" && (argc == 3 || (argc == 4 && std::strcmp(argv[3], "--app-volume") == 0)))
+        return cmd_play(argv[2], argc == 4);
     if (cmd == "--renderers" && (argc == 2 || argc == 3)) return cmd_renderers(argc == 3 ? std::atof(argv[2]) : 3.0);
     if (cmd == "--cast" && argc == 4) return cmd_cast(argv[2], argv[3]);
     if (cmd == "--scan" && (argc == 3 || argc == 4)) {

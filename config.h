@@ -9,7 +9,7 @@
 // Keys: musicdir, fullscreen, width, height, font, font_size,
 //       seek_wait_millis, seek_repeat_millis, seek_delta_millis,
 //       reverse_skip_millis, status_repeat_millis, clock_repeat_millis,
-//       outputs, stream_port, default_output.
+//       outputs, stream_port, default_output, local_volume.
 
 #ifndef PYJUKE_CONFIG_H
 #define PYJUKE_CONFIG_H
@@ -40,6 +40,10 @@ struct Config {
     bool outputs = true;
     int stream_port = 0;                 // port the library is served on; 0 = any free port
     std::string default_output;          // renderer name to switch to when it appears (empty: play locally)
+    // What the fader controls for "This computer": "system" (the computer's
+    // output volume, falling back to "app" where that is unavailable) or
+    // "app" (a gain on pyjuke's own audio only).
+    std::string local_volume = "system";
 };
 
 // Defaults, with musicdir = $HOME/music (or "./music" if HOME is unset).

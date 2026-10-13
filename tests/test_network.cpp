@@ -6,6 +6,7 @@
 
 #include "audio.h"
 #include "audio_switch.h"
+#include "local_volume.h"
 #include "net.h"
 #include "remote_renderer.h"
 #include "track_server.h"
@@ -622,10 +623,42 @@ void test_audio_switch()
     CHECK_EQ(loud[1], int16_t(-32768));
     AudioEngine engine;
     CHECK_EQ(engine.volume(), 100);
+    assert(engine.volume_backend().empty());
     engine.set_volume(-5);
     CHECK_EQ(engine.volume(), 0);
     engine.set_volume(140);
     CHECK_EQ(engine.volume(), 100);
+
+    section("local volume: a system backend replaces the gain");
+    struct FakeSystem : LocalVolume {
+        int level = 42;
+        int sets = 0;
+        int volume() override { return level; }
+        bool set_volume(int percent) override { level = percent; ++sets; return true; }
+        std::string name() const override { return "fake mixer"; }
+    };
+    auto fake = std::make_unique<FakeSystem>();
+    FakeSystem* raw = fake.get();
+    engine.set_volume(30);
+    engine.use_system_volume(std::move(fake));
+    CHECK_EQ(engine.volume_backend(), std::string("fake mixer"));
+    CHECK_EQ(engine.volume(), 42);  // the device's level, not the gain
+    engine.set_volume(77);
+    CHECK_EQ(raw->level, 77);
+    CHECK_EQ(raw->sets, 1);
+    CHECK_EQ(engine.volume(), 77);
+    engine.set_volume(130);
+    CHECK_EQ(raw->level, 100);
+    // The platform backend may or may not exist here; opening it must be safe,
+    // and reading it must not change anything.
+    if (auto real = LocalVolume::open()) {
+        int v = real->volume();
+        assert(v >= -1 && v <= 100);
+        assert(!real->name().empty());
+        std::printf("    (platform backend: %s, level %d)\n", real->name().c_str(), v);
+    } else {
+        std::printf("    (no platform backend here)\n");
+    }
 }
 
 } // namespace

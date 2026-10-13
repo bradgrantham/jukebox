@@ -134,6 +134,10 @@ Config parse_config(std::istream& in, const Config& base, std::ostream& warn, co
             if (!parse_int(val, c.stream_port, 0, 65535)) bad();
         } else if (key == "default_output") {
             c.default_output = val;
+        } else if (key == "local_volume") {
+            std::string l = lower(val);
+            if (l == "system" || l == "app") c.local_volume = l;
+            else bad();
         } else {
             warning("unknown key '" + key + "', ignoring");
         }
