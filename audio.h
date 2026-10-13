@@ -34,6 +34,9 @@ enum class AudioState : int {
     Paused  = 2,
 };
 
+// Multiply 16-bit samples by `gain` with rounding and clipping (gain 1 is a no-op).
+void scale_samples(int16_t* samples, size_t count, float gain);
+
 class AudioEngine final : public AudioControl {
 public:
     using WakeFn = std::function<void()>;
@@ -56,6 +59,10 @@ public:
     int64_t duration_ms() const override;
     bool take_track_ended() override;
     bool take_track_error() override;
+    // A software gain on the decoded samples (volume squared, so the slider
+    // feels even); starts at 100. Independent of the system volume.
+    void set_volume(int percent) override;
+    int volume() const override;
 
     AudioState state() const;
     // Human-readable description of the most recent error (empty if none).

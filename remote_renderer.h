@@ -5,7 +5,10 @@
 // actions; position and duration come from GetPositionInfo, polled once a
 // second on a worker thread and interpolated in between. End of track is
 // the renderer going STOPPED near the end of the track; a track the renderer
-// refuses, or never starts, is a track error.
+// refuses, or never starts, is a track error. Volume is the device's own,
+// through RenderingControl: read at start and with every poll (so the amp's
+// remote shows up on screen), never set unless asked; repeated set_volume()
+// calls while a slider is dragged collapse to the latest value.
 //
 // Like AudioEngine, every public method is called from one controlling
 // thread, returns at once, and the wake callback fires from the worker
@@ -56,6 +59,8 @@ public:
     int64_t duration_ms() const override;
     bool take_track_ended() override;
     bool take_track_error() override;
+    void set_volume(int percent) override;
+    int volume() const override;  // -1 until read, or if the device has no RenderingControl
 
     const upnp::Renderer& target() const;
     // The renderer has stopped answering altogether; the caller should move

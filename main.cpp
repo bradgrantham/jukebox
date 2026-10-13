@@ -10,6 +10,9 @@
 // Output picker: the button at the bottom right names where the sound goes,
 // this computer or a UPnP renderer found on the LAN; pressing it drops a list
 // up over the controls. The O key cycles through the outputs.
+//
+// Volume: the fader on the right edge is the current output's own level (a
+// renderer's volume, or a gain on local playback); Up/Down nudge it by 5.
 
 #include <algorithm>
 #include <cctype>
@@ -210,6 +213,7 @@ struct JukeboxScreen
     ui::Scrollbar* time_scrollbar;
     ui::BoxedText* date_time_text;
     ui::BoxedText* output_text;
+    ui::Scrollbar* volume_bar;
     std::unique_ptr<ui::Screen> screen;
 
     gfx::Renderer& renderer;
@@ -219,6 +223,9 @@ struct JukeboxScreen
     static constexpr float button_corner = 10;
     static constexpr float button_border = 3;
     static constexpr size_t max_picker_rows = 5;
+    static constexpr float pane_width = 700;   // the controls; the fader takes the rest of 760
+    static constexpr float fader_width = 50;
+    static constexpr int volume_step = 5;
 
     bool picker_open = false;
     bool picker_shown = false;        // the overlay layer is pushed
@@ -245,16 +252,17 @@ struct JukeboxScreen
     {
         using namespace ui;
 
+        const float w = pane_width;
         track_number = make_owned<BoxedText>(widgets, 120.0f, 45.0f, "", font, white, black, Justify::Right);
         auto track_bordered = make_owned<Bordered>(widgets, track_number);
-        track_name = make_owned<BoxedText>(widgets, 600.0f, 45.0f, "", font, white, black, Justify::Left);
-        auto number_name_hbox = make_owned<HBox>(widgets, 760.0f, 45.0f, std::vector<Widget*>{track_name, make_owned<Spacer>(widgets, 25.0f, 1.0f), track_bordered}, Justify::Left);
+        track_name = make_owned<BoxedText>(widgets, w - 160.0f, 45.0f, "", font, white, black, Justify::Left);
+        auto number_name_hbox = make_owned<HBox>(widgets, w, 45.0f, std::vector<Widget*>{track_name, make_owned<Spacer>(widgets, 25.0f, 1.0f), track_bordered}, Justify::Left);
 
-        track_artist = make_owned<BoxedText>(widgets, 760.0f, 36.0f, "", font, white, black, Justify::Left);
-        track_album = make_owned<BoxedText>(widgets, 760.0f, 36.0f, "", font, white, black, Justify::Left);
-        last_line = make_owned<BoxedText>(widgets, 760.0f, 36.0f, "", font, white, black, Justify::Left);
+        track_artist = make_owned<BoxedText>(widgets, w, 36.0f, "", font, white, black, Justify::Left);
+        track_album = make_owned<BoxedText>(widgets, w, 36.0f, "", font, white, black, Justify::Left);
+        last_line = make_owned<BoxedText>(widgets, w, 36.0f, "", font, white, black, Justify::Left);
 
-        auto track_info_vbox = make_owned<VBox>(widgets, 760.0f, 45.0f * 4, std::vector<Widget*>{number_name_hbox, make_owned<Spacer>(widgets, 1.0f, 5.0f), track_artist, track_album, last_line}, Justify::Distribute, 1.0f, Justify::Left);
+        auto track_info_vbox = make_owned<VBox>(widgets, w, 45.0f * 4, std::vector<Widget*>{number_name_hbox, make_owned<Spacer>(widgets, 1.0f, 5.0f), track_artist, track_album, last_line}, Justify::Distribute, 1.0f, Justify::Left);
 
         auto button = [&](Widget* child) {
             return make_owned<RoundedButton>(widgets, button_border, button_corner, white, black, child);
@@ -283,7 +291,7 @@ struct JukeboxScreen
         auto mode_button = button(make_owned<HBox>(widgets, 240.0f, 40.0f, std::vector<Widget*>{mode_text}, Justify::Distribute));
         mode_button->on_release_inside = [&player] { player.change_mode(); };
 
-        auto nav_panel = make_owned<HBox>(widgets, 760.0f, 55.0f, std::vector<Widget*>{previous_button, rewind_button, play_pause_button, forward_button, next_button, mode_button}, Justify::Distribute);
+        auto nav_panel = make_owned<HBox>(widgets, w, 55.0f, std::vector<Widget*>{previous_button, rewind_button, play_pause_button, forward_button, next_button, mode_button}, Justify::Distribute);
 
         position_text = make_owned<BoxedText>(widgets, 150.0f, 36.0f, "", font);
         duration_text = make_owned<BoxedText>(widgets, 150.0f, 36.0f, "", font);
@@ -297,10 +305,10 @@ struct JukeboxScreen
         style.corner_radius = button_corner;
         style.thumb_spacing = 3;
         style.thumb_fraction = .15f;
-        time_scrollbar = make_owned<Scrollbar>(widgets, 400.0f, button_height, 0.0f, 1000.0f, style);
+        time_scrollbar = make_owned<Scrollbar>(widgets, w - 360.0f, button_height, 0.0f, 1000.0f, style);
         time_scrollbar->on_scroll_continue = [&player](float value) { player.scroll_seek(static_cast<int>(value)); };
         time_scrollbar->on_scroll_finish = time_scrollbar->on_scroll_continue;
-        auto time_hbox = make_owned<HBox>(widgets, 760.0f, button_height, std::vector<Widget*>{position_text, time_scrollbar, duration_text}, Justify::Distribute);
+        auto time_hbox = make_owned<HBox>(widgets, w, button_height, std::vector<Widget*>{position_text, time_scrollbar, duration_text}, Justify::Distribute);
 
         // Clock on the left, the output button flush right.
         output_text = make_owned<BoxedText>(widgets, 240.0f, 40.0f, "", font, white, black, Justify::Left);
@@ -312,12 +320,31 @@ struct JukeboxScreen
                 outputs.browser->refresh();
             }
         };
-        date_time_text = make_owned<BoxedText>(widgets, 760.0f - output_button->width - 4, 36.0f, "", font, white, black, Justify::Left);
-        auto date_time_hbox = make_owned<HBox>(widgets, 760.0f, button_height, std::vector<Widget*>{date_time_text, output_button}, Justify::Left);
+        date_time_text = make_owned<BoxedText>(widgets, w - output_button->width - 4, 36.0f, "", font, white, black, Justify::Left);
+        auto date_time_hbox = make_owned<HBox>(widgets, w, button_height, std::vector<Widget*>{date_time_text, output_button}, Justify::Left);
 
-        auto pane = make_owned<VBox>(widgets, 760.0f, 460.0f, std::vector<Widget*>{track_info_vbox, make_owned<Spacer>(widgets, 1.0f, 25.0f), nav_panel, make_owned<Spacer>(widgets, 1.0f, 25.0f), time_hbox, make_owned<Spacer>(widgets, 1.0f, 25.0f), date_time_hbox}, Justify::Top);
+        auto pane = make_owned<VBox>(widgets, w, 460.0f, std::vector<Widget*>{track_info_vbox, make_owned<Spacer>(widgets, 1.0f, 25.0f), nav_panel, make_owned<Spacer>(widgets, 1.0f, 25.0f), time_hbox, make_owned<Spacer>(widgets, 1.0f, 25.0f), date_time_hbox}, Justify::Top);
 
-        screen = std::make_unique<Screen>(pane, 20.0f, 20.0f);
+        // The volume fader: full height on the right edge, same look as the time bar.
+        Scrollbar::Style fader_style = style;
+        fader_style.vertical = true;
+        fader_style.thumb_fraction = .08f;
+        volume_bar = make_owned<Scrollbar>(widgets, fader_width, 460.0f, 0.0f, 100.0f, fader_style);
+        volume_bar->on_scroll_continue = [this](float value) { outputs.audio.set_volume(static_cast<int>(value + .5f)); };
+        volume_bar->on_scroll_finish = volume_bar->on_scroll_continue;
+
+        auto root = make_owned<HBox>(widgets, 760.0f, 460.0f, std::vector<Widget*>{pane, make_owned<Spacer>(widgets, 760.0f - w - fader_width, 1.0f), volume_bar}, Justify::Left, 0.0f);
+
+        screen = std::make_unique<Screen>(root, 20.0f, 20.0f);
+    }
+
+    void nudge_volume(int delta)
+    {
+        int v = outputs.audio.volume();
+        if(v < 0) {
+            return;
+        }
+        outputs.audio.set_volume(std::clamp(v + delta, 0, 100));
     }
 
     // One row per output, this computer first, the current one starred;
@@ -379,6 +406,10 @@ struct JukeboxScreen
         if(!time_scrollbar->is_grabbed() && scroll >= 0) {
             time_scrollbar->set_value(static_cast<float>(scroll));
         }
+        int volume = outputs.audio.volume();
+        if(!volume_bar->is_grabbed() && volume >= 0) {
+            volume_bar->set_value(static_cast<float>(volume));
+        }
 
         std::string status;
         if(player.stopped_on_errors()) {
@@ -395,7 +426,7 @@ struct JukeboxScreen
 
         char clock[64];
         std::time_t t = std::time(nullptr);
-        std::strftime(clock, sizeof(clock), "%I:%M %p, %a %b %d", std::localtime(&t));
+        std::strftime(clock, sizeof(clock), "%I:%M %p %d/%m", std::localtime(&t));
         date_time_text->set_text(clock);
 
         // The picker layer follows picker_open and the renderer list.
@@ -488,6 +519,16 @@ void key_callback(GLFWwindow* window, int key, int, int action, int)
             }
             if(app.screen != nullptr) {
                 app.screen->picker_open = false;
+            }
+            break;
+        case GLFW_KEY_UP: case GLFW_KEY_EQUAL: case GLFW_KEY_KP_ADD:
+            if(app.screen != nullptr) {
+                app.screen->nudge_volume(JukeboxScreen::volume_step);
+            }
+            break;
+        case GLFW_KEY_DOWN: case GLFW_KEY_MINUS: case GLFW_KEY_KP_SUBTRACT:
+            if(app.screen != nullptr) {
+                app.screen->nudge_volume(-JukeboxScreen::volume_step);
             }
             break;
     }

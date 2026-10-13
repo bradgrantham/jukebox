@@ -45,12 +45,14 @@ struct Renderer {
     std::string name;         // friendlyName
     std::string location;     // description URL (also identifies the host)
     std::string control_url;  // absolute AVTransport control URL
+    std::string volume_url;   // absolute RenderingControl control URL, or empty
     std::string host;         // host part of control_url
     int64_t last_seen_ms = 0; // steady clock, maintained by RendererBrowser
 };
 
 // Fill `out` from a device description document fetched from `location`.
-// Finds the first AVTransport service, in the root or an embedded device.
+// Finds the first AVTransport service, in the root or an embedded device,
+// and the RenderingControl service beside it (volume), if there is one.
 // False if the document has no AVTransport service.
 bool parse_device_description(std::string_view xml, const std::string& location, Renderer& out);
 
@@ -76,6 +78,7 @@ struct SoapResult {
 };
 
 constexpr const char* kAVTransport = "urn:schemas-upnp-org:service:AVTransport:1";
+constexpr const char* kRenderingControl = "urn:schemas-upnp-org:service:RenderingControl:1";
 
 // POST one action to `control_url` and wait up to timeout_ms.
 SoapResult soap_call(const std::string& control_url, const std::string& service_type, const std::string& action,

@@ -185,6 +185,7 @@ public:
         Color inner_color = black;
         float thumb_fraction = .05f;
         Color thumb_color = white;
+        bool vertical = false;  // value runs bottom to top instead of left to right
     };
 
     Scrollbar(float w, float h, float min, float max, const Style& style);
@@ -201,9 +202,15 @@ public:
     bool mouse_event(Mouse what, float x, float y) override;
 
 private:
+    // Geometry is in "along" (the value axis) and "across" coordinates; for a
+    // vertical bar along runs upward from the bottom edge.
+    float length() const { return style.vertical ? height : width; }
+    float thickness() const { return style.vertical ? width : height; }
+    float along(float x, float y) const { return style.vertical ? height - y : x; }
+    float across(float x, float y) const { return style.vertical ? x : y; }
     float thumb_inset() const { return style.border_width + style.thumb_spacing; }
-    float thumb_width() const { return (width - thumb_inset() * 2) * style.thumb_fraction; }
-    float thumb_travel() const { return width - thumb_inset() * 2 - thumb_width(); }
+    float thumb_width() const { return (length() - thumb_inset() * 2) * style.thumb_fraction; }
+    float thumb_travel() const { return length() - thumb_inset() * 2 - thumb_width(); }
     float thumb_left() const;
     float pixel_to_value(float pixel) const;
 

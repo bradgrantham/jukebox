@@ -366,13 +366,20 @@ void Scrollbar::draw(Renderer& r, float x, float y)
 {
     r.rounded_rect({x, y, width, height}, style.corner_radius, style.inner_color, style.border_width, style.border_color);
     float thumb_radius = std::max(0.0f, style.corner_radius - style.border_width - style.thumb_spacing);
-    r.rounded_rect({x + thumb_left(), y + thumb_inset(), thumb_width(), height - thumb_inset() * 2}, thumb_radius, style.thumb_color);
+    float thick = thickness() - thumb_inset() * 2;
+    if(style.vertical) {
+        r.rounded_rect({x + thumb_inset(), y + height - thumb_left() - thumb_width(), thick, thumb_width()}, thumb_radius, style.thumb_color);
+    } else {
+        r.rounded_rect({x + thumb_left(), y + thumb_inset(), thumb_width(), thick}, thumb_radius, style.thumb_color);
+    }
 }
 
 bool Scrollbar::mouse_event(Mouse what, float x, float y)
 {
+    float a = along(x, y);
     if(!grabbed) {
-        bool on_thumb = x >= thumb_left() && x <= thumb_left() + thumb_width() && y >= thumb_inset() && y <= height - thumb_inset();
+        float c = across(x, y);
+        bool on_thumb = a >= thumb_left() && a <= thumb_left() + thumb_width() && c >= thumb_inset() && c <= thickness() - thumb_inset();
         if(!on_thumb) {
             return false;
         }
@@ -380,10 +387,10 @@ bool Scrollbar::mouse_event(Mouse what, float x, float y)
 
     if(what == Mouse::Press) {
         grabbed = true;
-        drag_offset = x - thumb_left();
+        drag_offset = a - thumb_left();
         on_scroll_start(value);
     } else if(grabbed) {
-        set_value(pixel_to_value(x - drag_offset));
+        set_value(pixel_to_value(a - drag_offset));
         if(what == Mouse::Motion) {
             on_scroll_continue(value);
         } else {

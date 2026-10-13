@@ -114,6 +114,41 @@ void test_callbacks_may_change_layers()
     assert(back.presses == 1);
 }
 
+void test_scrollbar_orientation()
+{
+    section("scrollbar: horizontal left-to-right, vertical bottom-to-top");
+    ui::Scrollbar::Style style;  // border 2, spacing 2 -> inset 4, thumb 5% of travel
+    ui::Scrollbar h(400, 50, 0, 100, style);
+    float seen = -1;
+    h.on_scroll_continue = [&](float v) { seen = v; };
+    assert(!h.mouse_event(ui::Mouse::Press, 200, 25));  // not on the thumb (value 0: thumb at the left)
+    assert(h.mouse_event(ui::Mouse::Press, 10, 25));
+    assert(h.is_grabbed());
+    assert(h.mouse_event(ui::Mouse::Motion, 210, 25));
+    assert(seen > 45 && seen < 60);
+    assert(h.mouse_event(ui::Mouse::Release, 210, 25));
+    assert(!h.is_grabbed());
+
+    style.vertical = true;
+    ui::Scrollbar v(50, 460, 0, 100, style);
+    float vseen = -1;
+    int finished = 0;
+    v.on_scroll_continue = [&](float val) { vseen = val; };
+    v.on_scroll_finish = [&](float) { ++finished; };
+    assert(!v.mouse_event(ui::Mouse::Press, 25, 100));   // top of the bar: no thumb there at value 0
+    assert(!v.mouse_event(ui::Mouse::Press, 1, 445));    // beside the thumb, inside the border
+    assert(v.mouse_event(ui::Mouse::Press, 25, 445));    // bottom: thumb at value 0
+    assert(v.mouse_event(ui::Mouse::Motion, 25, 245));   // drag upward raises the value
+    assert(vseen > 40 && vseen < 55);
+    assert(v.mouse_event(ui::Mouse::Motion, 25, 0));
+    assert(v.get_value() == 100);
+    assert(v.mouse_event(ui::Mouse::Release, 25, 0));
+    assert(finished == 1);
+    v.set_value(100);
+    assert(v.mouse_event(ui::Mouse::Press, 25, 15));     // now the thumb is at the top
+    assert(v.mouse_event(ui::Mouse::Release, 25, 15));
+}
+
 void test_container_order()
 {
     section("container: first child to claim a press grabs it");
@@ -136,6 +171,7 @@ int main()
     test_layers();
     test_modal();
     test_callbacks_may_change_layers();
+    test_scrollbar_orientation();
     test_container_order();
     std::printf("all tests passed\n");
     return 0;

@@ -17,6 +17,16 @@
 
 namespace pyjuke {
 
+void scale_samples(int16_t* samples, size_t count, float gain)
+{
+    if (gain == 1.0f) return;
+    for (size_t i = 0; i < count; ++i) {
+        float v = static_cast<float>(samples[i]) * gain;
+        v = std::clamp(v, -32768.0f, 32767.0f);
+        samples[i] = static_cast<int16_t>(v < 0 ? v - 0.5f : v + 0.5f);
+    }
+}
+
 namespace {
 
 // Samples per channel decoded and handed to libao per iteration. 1024 frames
@@ -55,6 +65,8 @@ struct AudioEngine::Impl {
     std::atomic<int> ch{0};
     std::atomic<bool> ended{false};
     std::atomic<bool> error{false};
+    std::atomic<int> volume_percent{100};
+    std::atomic<float> gain{1.0f};
 
     // ---- audio thread only ----
     std::unique_ptr<mp3dec_ex_t> dec;
@@ -216,6 +228,7 @@ void AudioEngine::Impl::play_chunk()
     size_t want = kChunkFrames * static_cast<size_t>(channels);
     if (buf.size() < want) buf.resize(want);
     size_t got = mp3dec_ex_read(dec.get(), buf.data(), want);
+    if (got > 0) scale_samples(buf.data(), got, gain.load());
     if (got > 0 && dev) {
         // ao_play blocks until the device has room; that is our pacing.
         ao_play(dev, reinterpret_cast<char*>(buf.data()),
@@ -353,6 +366,16 @@ void AudioEngine::seek_ms(int64_t ms)
     }
     impl_->cv.notify_one();
 }
+
+void AudioEngine::set_volume(int percent)
+{
+    percent = std::clamp(percent, 0, 100);
+    impl_->volume_percent.store(percent);
+    float v = static_cast<float>(percent) / 100.0f;
+    impl_->gain.store(v * v);
+}
+
+int AudioEngine::volume() const { return impl_->volume_percent.load(); }
 
 int64_t AudioEngine::position_ms() const { return impl_->pos.load(); }
 int64_t AudioEngine::duration_ms() const { return impl_->dur.load(); }

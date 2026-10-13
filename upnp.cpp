@@ -271,17 +271,16 @@ net::Headers parse_ssdp_headers(std::string_view datagram)
 
 bool parse_device_description(std::string_view xml, const std::string& location, Renderer& out)
 {
-    // Find the <service> whose serviceType is AVTransport (any version).
+    // Find the <service> elements for AVTransport and RenderingControl
+    // (any version); the first of each wins.
     std::string_view rest = xml;
-    std::string_view service;
+    std::string_view service, volume_service;
     for (;;) {
         std::string_view s = xml_element_raw(rest, "service");
         if (s.empty()) break;
         std::string type = xml_element(s, "serviceType");
-        if (type.find(":service:AVTransport:") != std::string::npos) {
-            service = s;
-            break;
-        }
+        if (service.empty() && type.find(":service:AVTransport:") != std::string::npos) service = s;
+        if (volume_service.empty() && type.find(":service:RenderingControl:") != std::string::npos) volume_service = s;
         rest = rest.substr(static_cast<size_t>(s.data() - rest.data()) + s.size());
     }
     if (service.empty()) return false;
@@ -294,6 +293,11 @@ bool parse_device_description(std::string_view xml, const std::string& location,
     out.control_url = net::resolve_url(base, control);
     if (auto u = net::parse_url(out.control_url)) out.host = u->host;
     else return false;
+    out.volume_url.clear();
+    if (!volume_service.empty()) {
+        std::string vc = xml_element(volume_service, "controlURL");
+        if (!vc.empty()) out.volume_url = net::resolve_url(base, vc);
+    }
 
     // Name and UDN of the device owning that service: the innermost <device>
     // whose extent contains it (an embedded renderer inside another root).
@@ -480,6 +484,7 @@ void RendererBrowser::Impl::note(const Renderer& found)
             it->name = found.name;
             it->location = found.location;
             it->control_url = found.control_url;
+            it->volume_url = found.volume_url;
             it->host = found.host;
             it->last_seen_ms = found.last_seen_ms;
         }

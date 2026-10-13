@@ -35,6 +35,12 @@ public:
     // Poll-and-clear: true once after the current track failed to open or
     // decode (or the output device could not be opened).
     virtual bool take_track_error() = 0;
+
+    // Output level, 0..100. For a renderer this is the device's own volume
+    // (what its remote control changes); locally it is a gain applied to
+    // the decoded audio. volume() is -1 while unknown or unsupported.
+    virtual void set_volume(int percent) { (void)percent; }
+    virtual int volume() const { return -1; }
 };
 
 } // namespace pyjuke

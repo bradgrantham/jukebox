@@ -32,8 +32,9 @@ struct CmdLoad { std::string path; bool paused; };
 struct CmdPlay {};
 struct CmdPause {};
 struct CmdSeek { int64_t ms; };
+struct CmdVolume { int percent; };
 struct CmdQuit {};
-using Command = std::variant<CmdLoad, CmdPlay, CmdPause, CmdSeek, CmdQuit>;
+using Command = std::variant<CmdLoad, CmdPlay, CmdPause, CmdSeek, CmdVolume, CmdQuit>;
 
 } // namespace
 
@@ -67,6 +68,8 @@ struct RemoteRenderer::Impl {
     std::atomic<bool> error{false};
     std::atomic<bool> lost{false};
     std::atomic<uint64_t> generation{0};  // bumped by load(); stale results are dropped
+    std::atomic<int> volume{-1};
+    std::atomic<int64_t> volume_hold_until{0};  // polled values are ignored until then, after a set
 
     // Worker-private state.
     std::thread thread;
@@ -79,6 +82,7 @@ struct RemoteRenderer::Impl {
     int64_t w_next_poll = 0;
     int w_failures = 0;
     uint64_t w_generation = 0;
+    bool w_volume_read = false;   // the initial GetVolume has been done
 
     void post(Command c);
     void run();
@@ -87,6 +91,8 @@ struct RemoteRenderer::Impl {
     void poll();
 
     upnp::SoapResult action(const char* name, std::vector<std::pair<std::string, std::string>> args = {});
+    upnp::SoapResult volume_action(const char* name, std::vector<std::pair<std::string, std::string>> args = {});
+    void poll_volume();
     void publish_position(int64_t pos, bool playing);
     void fail(const std::string& why, bool track_error);
     void set_wake_flag(std::atomic<bool>& flag);
@@ -172,6 +178,20 @@ bool RemoteRenderer::take_track_error()
     return impl_->error.exchange(false);
 }
 
+void RemoteRenderer::set_volume(int percent)
+{
+    percent = std::max(0, std::min(100, percent));
+    if (impl_->target.volume_url.empty()) return;
+    impl_->volume = percent;  // optimistic; the device confirms on the next poll
+    impl_->volume_hold_until = steady_ms() + 1500;
+    impl_->post(CmdVolume{percent});
+}
+
+int RemoteRenderer::volume() const
+{
+    return impl_->volume;
+}
+
 const upnp::Renderer& RemoteRenderer::target() const
 {
     return impl_->target;
@@ -233,6 +253,26 @@ void RemoteRenderer::Impl::fail(const std::string& why, bool track_error)
     }
 }
 
+upnp::SoapResult RemoteRenderer::Impl::volume_action(const char* name, std::vector<std::pair<std::string, std::string>> args)
+{
+    args.insert(args.begin(), {"Channel", "Master"});
+    args.insert(args.begin(), {"InstanceID", "0"});
+    return upnp::soap_call(target.volume_url, upnp::kRenderingControl, name, args, options.timeout_ms);
+}
+
+void RemoteRenderer::Impl::poll_volume()
+{
+    if (target.volume_url.empty()) return;
+    upnp::SoapResult r = volume_action("GetVolume");
+    if (!r.ok) return;
+    std::string text = r.arg("CurrentVolume");
+    if (text.empty()) return;
+    int v = std::atoi(text.c_str());
+    if (v < 0 || v > 100) return;
+    w_volume_read = true;
+    if (steady_ms() >= volume_hold_until) volume = v;
+}
+
 upnp::SoapResult RemoteRenderer::Impl::action(const char* name, std::vector<std::pair<std::string, std::string>> args)
 {
     args.insert(args.begin(), {"InstanceID", "0"});
@@ -253,6 +293,7 @@ upnp::SoapResult RemoteRenderer::Impl::action(const char* name, std::vector<std:
 
 void RemoteRenderer::Impl::run()
 {
+    poll_volume();  // so the slider shows the device's level before anything plays
     for (;;) {
         std::deque<Command> batch;
         {
@@ -267,10 +308,23 @@ void RemoteRenderer::Impl::run()
             }
             batch.swap(queue);
         }
+        // A slider drag posts many volumes; only the last one matters.
+        std::optional<int> last_volume;
         for (Command& c : batch)
+            if (auto* v = std::get_if<CmdVolume>(&c)) last_volume = v->percent;
+        for (Command& c : batch) {
+            if (auto* v = std::get_if<CmdVolume>(&c)) {
+                if (last_volume && v->percent == *last_volume) {
+                    last_volume.reset();
+                    volume_action("SetVolume", {{"DesiredVolume", std::to_string(v->percent)}});
+                }
+                continue;
+            }
             if (!handle(c)) return;
+        }
         if (w_loaded && !w_finished && steady_ms() >= w_next_poll) {
             poll();
+            poll_volume();
             w_next_poll = steady_ms() + options.poll_ms;
         }
     }

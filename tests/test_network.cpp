@@ -4,6 +4,7 @@
 #undef NDEBUG
 #include <cassert>
 
+#include "audio.h"
 #include "audio_switch.h"
 #include "net.h"
 #include "remote_renderer.h"
@@ -164,6 +165,7 @@ void test_upnp_helpers()
     CHECK_EQ(r.name, std::string("Living Room"));
     CHECK_EQ(r.udn, std::string("uuid:11111111-2222-3333-4444-555555555555"));
     CHECK_EQ(r.control_url, std::string("http://192.168.1.5:49152/upnp/control/rendertransport1"));
+    CHECK_EQ(r.volume_url, std::string("http://192.168.1.5:49152/upnp/control/rendering_control"));
     CHECK_EQ(r.host, std::string("192.168.1.5"));
 
     const char* embedded =
@@ -182,6 +184,7 @@ void test_upnp_helpers()
     CHECK_EQ(e.name, std::string("Pioneer VSX"));
     CHECK_EQ(e.udn, std::string("uuid:renderer"));
     CHECK_EQ(e.control_url, std::string("http://10.0.0.9:8080/base/avt/ctl"));
+    assert(e.volume_url.empty());  // no RenderingControl: volume unsupported
 
     upnp::Renderer none;
     assert(!upnp::parse_device_description("<root><device><friendlyName>TV</friendlyName></device></root>", "http://h/d.xml", none));
@@ -312,12 +315,14 @@ struct FakeRenderer {
     int64_t rel_ms = 0;
     int64_t dur_ms = -1;
     int fault_on_set_uri = 0;  // UPnP error code to return from SetAVTransportURI, 0 = none
+    int volume = 37;           // RenderingControl Master volume
 
     bool start()
     {
         return http.start(0, [this](const net::HttpRequest& req) { return handle(req); });
     }
     std::string control_url() const { return loopback_url(http.port(), "/AVTransport/ctl"); }
+    std::string volume_url() const { return loopback_url(http.port(), "/RenderingControl/ctl"); }
 
     net::HttpResponse handle(const net::HttpRequest& req)
     {
@@ -336,7 +341,10 @@ struct FakeRenderer {
                      "</errorCode><errorDescription>Resource not found</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>";
             return r;
         }
-        if (action == "GetTransportInfo") {
+        if (req.path == "/RenderingControl/ctl") {
+            if (action == "GetVolume") inner = "<CurrentVolume>" + std::to_string(volume) + "</CurrentVolume>";
+            else if (action == "SetVolume") volume = std::atoi(upnp::xml_element(req.body, "DesiredVolume").c_str());
+        } else if (action == "GetTransportInfo") {
             inner = "<CurrentTransportState>" + state + "</CurrentTransportState><CurrentTransportStatus>OK</CurrentTransportStatus><CurrentSpeed>1</CurrentSpeed>";
         } else if (action == "GetPositionInfo") {
             inner = "<Track>1</Track><TrackDuration>" + (dur_ms < 0 ? std::string("NOT_IMPLEMENTED") : upnp::format_upnp_time(dur_ms)) +
@@ -390,6 +398,7 @@ void test_remote_renderer(const fs::path& tmp)
     target.name = "Fake";
     target.host = "127.0.0.1";
     target.control_url = fake.control_url();
+    target.volume_url = fake.volume_url();
 
     std::atomic<int> wakes{0};
     RemoteRendererOptions opts;
@@ -401,6 +410,21 @@ void test_remote_renderer(const fs::path& tmp)
         RemoteRenderer rr(target, server, "127.0.0.1", tmp / "rlib", [&] { ++wakes; }, opts);
         CHECK_EQ(rr.position_ms(), int64_t(-1));
         CHECK_EQ(rr.duration_ms(), int64_t(-1));
+
+        // Volume is read from the device before anything plays, never set.
+        assert(wait_for([&] { return rr.volume() == 37; }));
+        CHECK_EQ(fake.count("SetVolume"), 0);
+        rr.set_volume(60);
+        CHECK_EQ(rr.volume(), 60);  // optimistic
+        assert(wait_for([&] { return fake.count("SetVolume") >= 1; }));
+        std::string vol_body = fake.last_body("SetVolume");
+        CHECK_EQ(upnp::xml_element(vol_body, "DesiredVolume"), std::string("60"));
+        CHECK_EQ(upnp::xml_element(vol_body, "Channel"), std::string("Master"));
+        CHECK_EQ(upnp::xml_element(vol_body, "InstanceID"), std::string("0"));
+        rr.set_volume(250);
+        assert(wait_for([&] { return fake.count("SetVolume") >= 2; }));
+        CHECK_EQ(upnp::xml_element(fake.last_body("SetVolume"), "DesiredVolume"), std::string("100"));
+        CHECK_EQ(rr.volume(), 100);
 
         rr.load(a.string(), false);
         assert(wait_for([&] { return fake.count("Play") >= 1; }));
@@ -441,6 +465,19 @@ void test_remote_renderer(const fs::path& tmp)
         fake.set("PLAYING", 31000, 60000);
         std::this_thread::sleep_for(std::chrono::milliseconds(150));
         assert(rr.position_ms() > 31000);
+
+        // A change made with the device's own remote shows up after the hold.
+        {
+            std::lock_guard<std::mutex> lock(fake.mutex);
+            fake.volume = 20;
+        }
+        assert(wait_for([&] { return rr.volume() == 20; }, 3000));
+        // A burst, as from a slider drag: ends at the last value.
+        int sets = fake.count("SetVolume");
+        for (int v = 0; v <= 100; v += 5) rr.set_volume(v);
+        assert(wait_for([&] { return fake.count("SetVolume") > sets && upnp::xml_element(fake.last_body("SetVolume"), "DesiredVolume") == "100"; }));
+        CHECK_EQ(rr.volume(), 100);
+        assert(fake.count("SetVolume") - sets < 21);  // coalesced at least a little
 
         // Stopped early from the renderer's own controls: no end-of-track.
         fake.set("STOPPED", 32000, 60000);
@@ -509,6 +546,18 @@ void test_remote_renderer(const fs::path& tmp)
     // Destruction sent Stop.
     assert(fake.count("Stop") >= 1);
 
+    // Without RenderingControl, volume stays unknown and set_volume is a no-op.
+    {
+        upnp::Renderer mute = target;
+        mute.volume_url.clear();
+        int sets = fake.count("SetVolume");
+        RemoteRenderer rr(mute, server, "127.0.0.1", tmp / "rlib", [&] { ++wakes; }, opts);
+        rr.set_volume(50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        CHECK_EQ(rr.volume(), -1);
+        CHECK_EQ(fake.count("SetVolume"), sets);
+    }
+
     // The renderer disappears: lost(), not a stream of track errors.
     {
         RemoteRenderer rr(target, server, "127.0.0.1", tmp / "rlib", [&] { ++wakes; }, opts);
@@ -527,7 +576,7 @@ void test_audio_switch()
 {
     section("audio switch forwards to the current target");
     struct Counter : AudioControl {
-        int loads = 0, plays = 0, pauses = 0, seeks = 0;
+        int loads = 0, plays = 0, pauses = 0, seeks = 0, vol = 70;
         void load(const std::string&, bool) override { ++loads; }
         void play() override { ++plays; }
         void pause() override { ++pauses; }
@@ -536,6 +585,8 @@ void test_audio_switch()
         int64_t duration_ms() const override { return 22; }
         bool take_track_ended() override { return false; }
         bool take_track_error() override { return false; }
+        void set_volume(int v) override { vol = v; }
+        int volume() const override { return vol; }
     } a, b;
     AudioSwitch sw(a);
     sw.load("x", false);
@@ -550,6 +601,31 @@ void test_audio_switch()
     CHECK_EQ(a.pauses, 0);
     CHECK_EQ(sw.position_ms(), int64_t(11));
     assert(&sw.target() == &b);
+    sw.set_volume(33);
+    CHECK_EQ(b.vol, 33);
+    CHECK_EQ(a.vol, 70);
+    CHECK_EQ(sw.volume(), 33);
+
+    section("local gain: squared curve, rounding, clipping");
+    int16_t s[5] = {1000, -1000, 32767, -32768, 3};
+    scale_samples(s, 5, 1.0f);
+    CHECK_EQ(s[0], int16_t(1000));
+    scale_samples(s, 5, 0.5f);
+    CHECK_EQ(s[0], int16_t(500));
+    CHECK_EQ(s[1], int16_t(-500));
+    CHECK_EQ(s[2], int16_t(16384));
+    CHECK_EQ(s[3], int16_t(-16384));
+    CHECK_EQ(s[4], int16_t(2));  // 1.5 rounds away from zero
+    int16_t loud[2] = {30000, -30000};
+    scale_samples(loud, 2, 2.0f);
+    CHECK_EQ(loud[0], int16_t(32767));
+    CHECK_EQ(loud[1], int16_t(-32768));
+    AudioEngine engine;
+    CHECK_EQ(engine.volume(), 100);
+    engine.set_volume(-5);
+    CHECK_EQ(engine.volume(), 0);
+    engine.set_volume(140);
+    CHECK_EQ(engine.volume(), 100);
 }
 
 } // namespace

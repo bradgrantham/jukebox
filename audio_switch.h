@@ -27,6 +27,8 @@ public:
     int64_t duration_ms() const override { return target_->duration_ms(); }
     bool take_track_ended() override { return target_->take_track_ended(); }
     bool take_track_error() override { return target_->take_track_error(); }
+    void set_volume(int percent) override { target_->set_volume(percent); }
+    int volume() const override { return target_->volume(); }
 
 private:
     AudioControl* target_;

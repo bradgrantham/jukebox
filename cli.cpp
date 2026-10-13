@@ -4,6 +4,7 @@
 //   pyjuke-cli --play FILE             play; stdin commands:
 //                                        p      pause / resume
 //                                        s N    seek to N seconds
+//                                        v N    volume 0..100
 //                                        q      quit
 //                                      prints position once a second and
 //                                      exits when the track ends
@@ -164,8 +165,12 @@ int run_console(AudioControl& audio, std::atomic<bool>& woke, const std::functio
                 double sec = std::atof(line.c_str() + 1);
                 audio.seek_ms(static_cast<int64_t>(sec * 1000.0));
                 std::printf("seek %.3f s\n", sec);
+            } else if (line[0] == 'v') {
+                int v = std::atoi(line.c_str() + 1);
+                audio.set_volume(v);
+                std::printf("volume %d\n", v);
             } else {
-                std::printf("? (p, s N, q)\n");
+                std::printf("? (p, s N, v N, q)\n");
             }
             std::fflush(stdout);
         }
@@ -191,9 +196,9 @@ int run_console(AudioControl& audio, std::atomic<bool>& woke, const std::functio
         auto now = clock::now();
         if (now - last_print >= std::chrono::seconds(1)) {
             last_print = now;
-            std::printf("pos %s / %s (%lld ms) %s\n", format_time(audio.position_ms()).c_str(),
+            std::printf("pos %s / %s (%lld ms) vol %d %s\n", format_time(audio.position_ms()).c_str(),
                         format_time(audio.duration_ms()).c_str(), static_cast<long long>(audio.position_ms()),
-                        status().c_str());
+                        audio.volume(), status().c_str());
             std::fflush(stdout);
         }
     }
